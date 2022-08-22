@@ -71,7 +71,11 @@
     `define ETH_STATUS_TXRESET_W          1
     `define ETH_STATUS_TXRESET_R          0:0
 
+`define ETH_RESET  8'hc
+    `define ETH_RESET_R                   0:0
 
+`define ETH_MAC_MSB  8'h10
+`define ETH_MAC_LSB  8'h14
 
 // Speed constants
 `define SPEED_1000MBPS      2'b10

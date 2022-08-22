@@ -4,6 +4,11 @@
 #define ETH_RX_OFFSET         0x0
 #define ETH_TX_OFFSET         0x4
 #define ETH_STATUS_OFFSET     0x8
+#define ETH_RESET             0xC
+#define ETH_MAC_MSB           0x10
+#define ETH_MAC_LSB           0x14
+
+#define ETH_RESET_Q             (1 << 0)
 
 #define ETH_STATUS_TXRESET      (1 << 0)
 #define ETH_STATUS_RXRESET      (1 << 1)

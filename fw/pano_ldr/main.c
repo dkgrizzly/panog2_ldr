@@ -92,6 +92,10 @@ typedef struct {
 
 #define CFG_REG_BRD_ID     0x0000
 #define CFG_REG_CHIP_ID    0x0100
+#define CFG_REG_SERIAL0    0x0400
+#define CFG_REG_SERIAL1    0x0500
+#define CFG_REG_SERIAL2    0x0600
+#define CFG_REG_SERIAL3    0x0700
 #define CFG_REG_MAC_MSB    0x1000
 #define CFG_REG_MAC_LSB    0x1100
 // ---
@@ -127,6 +131,8 @@ err_t TcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len);
 int gRxCount;
 uint8_t gRxBuf[RX_BUF_LEN];
 
+char gPanoSerial[] = "1170000000-0PLC0";
+
 uint8_t gOurMac[] = {MAC_ADR};
 struct netif gNetif;
 struct tcp_pcb *gTCP_pcb;
@@ -160,6 +166,7 @@ int GetTftpTransferVals(char **pCmdline,TransferType_t Type);
 bool CheckEmpty(uint32_t Adr,uint32_t PageSize,uint32_t EraseSize);
 int TftpTranserWait(tftp_ldr_internal *p);
 int FlashInternal(char *CmdLine,bool bAutoErase);
+uint32_t ParseInfoBlock(void);
 uint32_t ParseDataBlock(void);
 void AddBoardInfo(Tag_t Tag,size_t Len,void *TagData);
 int ButtonPressed(void);
@@ -175,6 +182,9 @@ int RebootCmd(char *CmdLine);
 int DumpCmd(char *CmdLine);
 int EraseCmd(char *CmdLine);
 int MapCmd(char *CmdLine);
+int InfoCmd(char *CmdLine);
+int MemReadCmd(char *CmdLine);
+int MemWriteCmd(char *CmdLine);
 int SaveCmd(char *CmdLine);
 int TftpCmd(char *CmdLine);
 int VerifyCmd(char *CmdLine);
@@ -187,6 +197,9 @@ const CommandTable_t gCmdTable[] = {
    { "erase    ",  "<start adr> <end adr>",NULL,EraseCmd},
    { "flash    ",  "<filename> <flash adr>",NULL,FlashCmd},
    { "map      ",  "Display blank regions in flash",NULL,MapCmd},
+   { "info     ",  "Display PanoInfoBlock",NULL,InfoCmd},
+   { "memrd    ",  "<addr>         Memory Read",NULL,MemReadCmd},
+   { "memwr    ",  "<addr> <data>  Memory Write",NULL,MemWriteCmd},
    { "reboot   ",  "<flash adr>",NULL,RebootCmd},
    { "save     ",  "<filename> <flash adr> <length>",NULL,SaveCmd},
    { "tftp     ",  "<IP adr of tftp server>",NULL,TftpCmd},
@@ -223,6 +236,19 @@ int main(int argc, char *argv[])
 
    spi_init(CONFIG_SPILITE_BASE);
    spi_chip_init();
+
+   ParseInfoBlock();
+//   if(gBoardID == BOARD_ID_DZ22_2) {
+//      Temp = REG_RD(GPIO_BASE + GPIO_DIRECTION);
+//      Temp |= GPIO_PWR_STATUS_BITS;
+//      REG_WR(GPIO_BASE + GPIO_DIRECTION,Temp);
+//   }
+   if(gBoardID != 0) {
+      REG_WR(ETH_BASE + ETH_RESET, ETH_RESET_Q);
+      REG_WR(ETH_BASE + ETH_MAC_MSB, (gOurMac[0] << 8) | gOurMac[1]);
+      REG_WR(ETH_BASE + ETH_MAC_LSB, (gOurMac[2] << 24) | (gOurMac[3] << 16) | (gOurMac[4] << 8) | gOurMac[5]);
+      REG_WR(ETH_BASE + ETH_RESET, 0);
+   }
 
    ParseDataBlock();
    if(gAutoBoot == AUTOBOOT_ON && !ButtonPressed()) {
@@ -1039,6 +1065,66 @@ int MapCmd(char *CmdLine)
    return Ret;
 }
 
+int InfoCmd(char *CmdLine)
+{
+   int Ret = RESULT_OK;
+   const FlashInfo_t *p = spi_get_flashinfo();
+
+   NetPrintf("BoardID: 0x%08x\n", gBoardID);
+
+   NetPrintf("FlashSize: 0x%08x\n", p->FlashSize);
+
+   NetPrintf("Serial: %16s\n", gPanoSerial);
+
+   NetPrintf("Ethernet MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+      gOurMac[0], gOurMac[1], gOurMac[2], gOurMac[3], gOurMac[4], gOurMac[5] );
+
+   return Ret;
+}
+
+int MemReadCmd(char *CmdLine)
+{
+   int Ret = RESULT_OK;
+   uint32_t BusAddr;
+   uint32_t BusData;
+
+   if(*CmdLine) {
+      if(ConvertValue(&CmdLine,&BusAddr)) {
+         Ret = RESULT_BAD_ARG;
+      }
+      else {
+         BusData = REG_RD(BusAddr) ;
+
+         NetPrintf("\r\n%08X: %08X\r\n", BusAddr, BusData );
+      }
+   }
+
+   return Ret;
+}
+
+int MemWriteCmd(char *CmdLine)
+{
+   int Ret = RESULT_OK;
+   uint32_t BusAddr;
+   uint32_t BusData;
+
+   if(*CmdLine) {
+      if(ConvertValue(&CmdLine,&BusAddr)) {
+         Ret = RESULT_BAD_ARG;
+      }
+      else if(ConvertValue(&CmdLine,&BusData)) {
+         Ret = RESULT_BAD_ARG;
+      }
+      else {
+         REG_WR(BusAddr, BusData);
+
+         NetPrintf("\r\n%08X: %08X\r\n", BusAddr, BusData );
+      }
+   }
+
+   return Ret;
+}
+
 void ReBoot(uint32_t SpiAdr)
 {
    LOG("0x%x\n",SpiAdr);
@@ -1299,6 +1385,68 @@ int TftpTranserWait(tftp_ldr_internal *p)
    }
 
    return Ret;
+}
+
+uint32_t ParseInfoBlock()
+{
+   uint32_t InfoPageOffset;
+   PanoInfoBlock_t *pPIB = (PanoInfoBlock_t *) gTemp;
+   const FlashInfo_t *p = spi_get_flashinfo();
+   int SerialByte;
+   uint32_t SerialTemp;
+
+   gBoardID = 0;
+
+   switch(p->FlashSize) {
+      case 0x1000000:
+        InfoPageOffset = 0x8c0000;
+        spi_read(0x8c0000,gTemp,sizeof(gTemp));
+        break;
+      case 0x800000:
+        InfoPageOffset = 0x6b0000;
+        spi_read(0x6b0000,gTemp,sizeof(gTemp));
+        break;
+      default:
+        return 0;
+   }
+
+   do {
+      switch(htons(pPIB->Type)) {
+         case INFO_TYPE_CFG_WR:
+            switch(ntohs(pPIB->Register)) {
+               case CFG_REG_BRD_ID:
+                  gBoardID = pPIB->Value;
+                  break;
+               case CFG_REG_MAC_MSB:
+                  gOurMac[0] = (pPIB->Value & 0xff00) >> 8;
+                  gOurMac[1] = (pPIB->Value & 0xff);
+                  break;
+               case CFG_REG_MAC_LSB:
+                  gOurMac[2] = (pPIB->Value & 0xff000000) >> 24;
+                  gOurMac[3] = (pPIB->Value & 0xff0000) >> 16;
+                  gOurMac[4] = (pPIB->Value & 0xff00) >> 8;
+                  gOurMac[5] = (pPIB->Value & 0xff);
+                  break;
+               case CFG_REG_SERIAL0:
+               case CFG_REG_SERIAL1:
+               case CFG_REG_SERIAL2:
+               case CFG_REG_SERIAL3:
+                  SerialByte = (pPIB->Register & 0x3);
+                  SerialTemp = pPIB->Value;
+                  gPanoSerial[SerialByte++] = (SerialTemp & 0xff); SerialTemp >>= 8;
+                  gPanoSerial[SerialByte++] = (SerialTemp & 0xff); SerialTemp >>= 8;
+                  gPanoSerial[SerialByte++] = (SerialTemp & 0xff); SerialTemp >>= 8;
+                  gPanoSerial[SerialByte] = (SerialTemp & 0xff);
+                  break;
+            }
+            break;
+         case INFO_TYPE_WR:
+            break;
+      }
+      pPIB++;
+   } while((((uint32_t)pPIB) < (((uint32_t)gTemp) + sizeof(gTemp))) && (pPIB->Type != 0xffff));
+
+   return gBoardID;
 }
 
 // read Pano data block into gTemp, return flash adr of first free word

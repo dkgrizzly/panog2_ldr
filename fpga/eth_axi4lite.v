@@ -127,7 +127,7 @@ else if (cfg_awvalid_i && cfg_awready_o)
     wr_addr_q <= cfg_awaddr_i[7:0];
 
 wire [7:0] wr_addr_w = awvalid_q ? wr_addr_q : cfg_awaddr_i[7:0];
-wire [47:0] mac_address = MAC_ADDRESS;
+reg [47:0] mac_address = MAC_ADDRESS;
 wire rx_reset;
 wire rx_empty;
 reg rx_rd_en;
@@ -195,6 +195,50 @@ else
 
 
 //-----------------------------------------------------------------
+// Register ETH_reset
+//-----------------------------------------------------------------
+reg eth_reset_q;
+
+always @ (posedge clk_i or posedge rst_i)
+if (rst_i)
+    eth_reset_q <= 1'b1;
+else if (write_en_w && (wr_addr_w[7:0] == `ETH_RESET))
+    begin
+        eth_reset_q <= wr_data_q[0];
+    end
+
+
+//-----------------------------------------------------------------
+// Register ETH_mac_msb
+//-----------------------------------------------------------------
+
+always @ (posedge clk_i or posedge rst_i)
+if (rst_i)
+    mac_address[15:0] <= MAC_ADDRESS[15:0];
+else if (write_en_w && (wr_addr_w[7:0] == `ETH_MAC_MSB))
+    begin
+        mac_address[15:8] <= wr_data_q[7:0];
+        mac_address[7:0] <= wr_data_q[15:8];
+    end
+
+
+//-----------------------------------------------------------------
+// Register ETH_mac_lsb
+//-----------------------------------------------------------------
+
+always @ (posedge clk_i or posedge rst_i)
+if (rst_i)
+    mac_address[47:16] <= MAC_ADDRESS[47:16];
+else if (write_en_w && (wr_addr_w[7:0] == `ETH_MAC_LSB))
+    begin
+        mac_address[47:40] <= wr_data_q[7:0];
+        mac_address[39:32] <= wr_data_q[15:8];
+        mac_address[31:24] <= wr_data_q[23:16];
+        mac_address[23:16] <= wr_data_q[31:24];
+    end
+
+
+//-----------------------------------------------------------------
 // Read mux
 //-----------------------------------------------------------------
 reg [31:0] data_r;
@@ -218,6 +262,23 @@ begin
         data_r[`ETH_STATUS_TXRESET_R] = tx_reset;
         data_r[`ETH_STATUS_LINK_UP_R] = link_up;
         data_r[`ETH_STATUS_LINK_SPEED_R] = link_speed;
+    end
+    `ETH_RESET:
+    begin
+        data_r[`ETH_RESET_R] = eth_reset_q;
+    end
+    `ETH_MAC_MSB:
+    begin
+        data_r[31:16] = 16'h0;
+        data_r[15:8] = mac_address[7:0];
+        data_r[7:0] = mac_address[15:8];
+    end
+    `ETH_MAC_LSB:
+    begin
+        data_r[31:24] = mac_address[23:16];
+        data_r[23:16] = mac_address[31:24];
+        data_r[15:8] = mac_address[39:32];
+        data_r[7:0] = mac_address[47:40];
     end
     default :
         data_r = 32'b0;
@@ -277,7 +338,7 @@ eth_u (
  // Unbuffered 125 MHz clock input
     .clock_125_i(clock_125_i)
  // Asynchronous reset
-    ,.reset_i(rst_i)
+    ,.reset_i(eth_reset_q)
  // MAC address of this station
  // Must not change after reset is deasserted
     ,.mac_address_i(mac_address)
